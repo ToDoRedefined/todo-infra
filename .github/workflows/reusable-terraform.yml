@@ -1,0 +1,252 @@
+name: Reusable Terraform
+
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: Terraform command to run.
+        required: true
+        type: string
+      target_environment:
+        description: Target environment.
+        required: true
+        type: string
+      namespace:
+        description: Namespace to pass to Terraform.
+        required: false
+        default: ""
+        type: string
+      checkout_ref:
+        description: Git ref or SHA to deploy from.
+        required: false
+        default: ""
+        type: string
+      skip_plan:
+        description: Skip plan before apply or destroy.
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_CLIENT_SECRET:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: Terraform ${{ inputs.command }} ${{ inputs.target_environment }}
+    runs-on: ubuntu-latest
+
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+      NAMESPACE: ${{ inputs.namespace }}
+
+    steps:
+      - name: Checkout workflow utilities
+        uses: actions/checkout@v4
+
+      - name: Setup tools
+        uses: ./.github/actions/setup-terraform-azure
+        with:
+          azure_login: ${{ inputs.command == 'validate' && 'false' || 'true' }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+
+      - name: Checkout selected Terraform ref
+        if: ${{ inputs.checkout_ref != '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref }}
+          clean: true
+
+      - name: Resolve Terraform inputs
+        id: tf
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${TARGET_ENVIRONMENT}" in
+            dev|test|prod|eph) ;;
+            *)
+              echo "Unsupported environment: ${TARGET_ENVIRONMENT}" >&2
+              exit 1
+              ;;
+          esac
+
+          tfvars_path="env/${TARGET_ENVIRONMENT}/${TARGET_ENVIRONMENT}.tfvars"
+          if [[ ! -f "${tfvars_path}" ]]; then
+            echo "Missing tfvars file: ${tfvars_path}" >&2
+            exit 1
+          fi
+
+          namespace=""
+          state_key="${TARGET_ENVIRONMENT}.terraform.tfstate"
+
+          if [[ "${TARGET_ENVIRONMENT}" == "eph" ]]; then
+            if [[ -z "${NAMESPACE}" ]]; then
+              echo "namespace is required for eph." >&2
+              exit 1
+            fi
+
+            namespace="${NAMESPACE}-"
+            state_key="${TARGET_ENVIRONMENT}-${NAMESPACE}.terraform.tfstate"
+          fi
+
+          {
+            echo "tfvars_path=${tfvars_path}"
+            echo "namespace=${namespace}"
+            echo "state_key=${state_key}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Terraform format
+        shell: bash
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init without backend
+        if: ${{ inputs.command == 'validate' }}
+        shell: bash
+        run: terraform init -backend=false
+
+      - name: Terraform init
+        if: ${{ inputs.command != 'validate' }}
+        shell: bash
+        env:
+          STATE_KEY: ${{ steps.tf.outputs.state_key }}
+        run: |
+          set -euo pipefail
+
+          subscription_id="$(az account show --query id -o tsv)"
+          subscription_hash="$(printf '%s' "${subscription_id}" | sha256sum | cut -c1-6)"
+          storage_account_name="tfstate${subscription_hash}${TARGET_ENVIRONMENT}"
+
+          terraform init \
+            -backend-config="resource_group_name=rg-tfstate-${TARGET_ENVIRONMENT}" \
+            -backend-config="storage_account_name=${storage_account_name}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=${STATE_KEY}"
+
+      - name: Terraform validate
+        shell: bash
+        run: terraform validate
+
+      - name: Terraform plan
+        if: ${{ inputs.command == 'plan' || inputs.command == 'apply' || inputs.command
+          == 'apply-destroy' }}
+        shell: bash
+        env:
+          TFVARS_PATH: ${{ steps.tf.outputs.tfvars_path }}
+          NAMESPACE: ${{ steps.tf.outputs.namespace }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ inputs.skip_plan }}" == "true" ]]; then
+            echo "Terraform plan skipped by workflow input." | tee plan-show.txt
+          else
+            terraform plan \
+              -no-color \
+              -out=tfplan \
+              -var-file="${TFVARS_PATH}" \
+              -var="environment=${TARGET_ENVIRONMENT}" \
+              -var="namespace=${NAMESPACE}"
+
+            terraform show -no-color tfplan | tee plan-show.txt
+          fi
+
+          {
+            echo "### Terraform plan: ${TARGET_ENVIRONMENT}"
+            echo
+            echo '```terraform'
+            cat plan-show.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload Terraform plan
+        if: ${{ (inputs.command == 'plan' || inputs.command == 'apply' || inputs.command
+          == 'apply-destroy') && !inputs.skip_plan }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ inputs.target_environment }}-${{ inputs.namespace ||
+            'default' }}
+          path: |
+            tfplan
+            plan-show.txt
+          retention-days: 14
+
+      - name: Terraform apply
+        if: ${{ inputs.command == 'apply' || inputs.command == 'apply-destroy' }}
+        shell: bash
+        env:
+          TFVARS_PATH: ${{ steps.tf.outputs.tfvars_path }}
+          NAMESPACE: ${{ steps.tf.outputs.namespace }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ inputs.skip_plan }}" == "true" ]]; then
+            terraform apply \
+              -auto-approve \
+              -no-color \
+              -var-file="${TFVARS_PATH}" \
+              -var="environment=${TARGET_ENVIRONMENT}" \
+              -var="namespace=${NAMESPACE}"
+          else
+            terraform apply -auto-approve -no-color tfplan
+          fi
+
+      - name: Terraform destroy plan
+        if: ${{ (inputs.command == 'destroy' || inputs.command == 'apply-destroy') &&
+          !inputs.skip_plan }}
+        shell: bash
+        env:
+          TFVARS_PATH: ${{ steps.tf.outputs.tfvars_path }}
+          NAMESPACE: ${{ steps.tf.outputs.namespace }}
+        run: |
+          set -euo pipefail
+
+          terraform plan \
+            -destroy \
+            -no-color \
+            -out=tfdestroyplan \
+            -var-file="${TFVARS_PATH}" \
+            -var="environment=${TARGET_ENVIRONMENT}" \
+            -var="namespace=${NAMESPACE}"
+
+          terraform show -no-color tfdestroyplan | tee destroy-plan-show.txt
+
+          {
+            echo "### Terraform destroy plan: ${TARGET_ENVIRONMENT}"
+            echo
+            echo '```terraform'
+            cat destroy-plan-show.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Terraform destroy
+        if: ${{ inputs.command == 'destroy' || inputs.command == 'apply-destroy' }}
+        shell: bash
+        env:
+          TFVARS_PATH: ${{ steps.tf.outputs.tfvars_path }}
+          NAMESPACE: ${{ steps.tf.outputs.namespace }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ inputs.skip_plan }}" == "true" ]]; then
+            terraform destroy \
+              -auto-approve \
+              -no-color \
+              -var-file="${TFVARS_PATH}" \
+              -var="environment=${TARGET_ENVIRONMENT}" \
+              -var="namespace=${NAMESPACE}"
+          else
+            terraform apply -auto-approve -no-color tfdestroyplan
+          fi

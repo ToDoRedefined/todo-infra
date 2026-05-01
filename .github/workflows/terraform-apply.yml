@@ -1,0 +1,76 @@
+name: Terraform Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_type:
+        description: Apply from a branch or a tag.
+        required: true
+        default: branch
+        type: choice
+        options:
+          - branch
+          - tag
+      ref_name:
+        description: Branch or tag name to apply.
+        required: true
+        default: main
+        type: string
+      target_environment:
+        description: Environment to apply.
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+      skip_plan:
+        description: Skip the plan step and apply directly.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-apply-${{ inputs.target_environment }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-ref:
+    name: Resolve source ref
+    runs-on: ubuntu-latest
+
+    outputs:
+      checkout_ref: ${{ steps.ref.outputs.checkout_ref }}
+
+    steps:
+      - name: Resolve ref
+        id: ref
+        shell: bash
+        env:
+          SOURCE_TYPE: ${{ inputs.source_type }}
+          REF_NAME: ${{ inputs.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${SOURCE_TYPE}" == "tag" ]]; then
+            checkout_ref="refs/tags/${REF_NAME}"
+          else
+            checkout_ref="refs/heads/${REF_NAME}"
+          fi
+
+          echo "checkout_ref=${checkout_ref}" >> "${GITHUB_OUTPUT}"
+
+  terraform-apply:
+    name: Terraform apply
+    needs: resolve-ref
+    uses: ./.github/workflows/reusable-terraform.yml
+    with:
+      command: apply
+      target_environment: ${{ inputs.target_environment }}
+      checkout_ref: ${{ needs.resolve-ref.outputs.checkout_ref }}
+      skip_plan: ${{ inputs.skip_plan }}
+    secrets: inherit

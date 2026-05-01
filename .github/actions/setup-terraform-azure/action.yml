@@ -1,0 +1,42 @@
+name: Setup Terraform and Azure
+description: Installs Terraform and optionally logs in to Azure with a service principal.
+
+inputs:
+  terraform_version:
+    description: Terraform version to install.
+    required: false
+    default: "1.13.0"
+  azure_login:
+    description: Whether to log in to Azure.
+    required: false
+    default: "true"
+  azure_client_id:
+    description: Azure service principal client id.
+    required: false
+  azure_client_secret:
+    description: Azure service principal client secret.
+    required: false
+  azure_subscription_id:
+    description: Azure subscription id.
+    required: false
+  azure_tenant_id:
+    description: Azure tenant id.
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+
+    - name: Azure login with service principal
+      if: ${{ inputs.azure_login == 'true' }}
+      uses: azure/login@v2
+      with:
+        creds: >-
+          {"clientId":"${{ inputs.azure_client_id }}","clientSecret":"${{
+          inputs.azure_client_secret }}","subscriptionId":"${{
+          inputs.azure_subscription_id }}","tenantId":"${{
+          inputs.azure_tenant_id }}"}

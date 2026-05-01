@@ -1,5 +1,5 @@
 variable "location" {
-  type = string
+  type    = string
   default = "Canada Central"
 }
 

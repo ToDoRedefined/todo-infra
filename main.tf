@@ -1,5 +1,5 @@
 resource "azurerm_resource_group" "core" {
-  name     = "${var.namespace}rg-core-${var.environment}-${var.location}"
+  name     = "${namespace_prefix}rg-core-${var.environment}-${var.location}"
   location = var.location
 
   tags = {

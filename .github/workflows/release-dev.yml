@@ -1,0 +1,54 @@
+name: Release Dev
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-dev
+  cancel-in-progress: false
+
+jobs:
+  create-tag:
+    name: Create release tag
+    runs-on: ubuntu-latest
+
+    outputs:
+      tag_name: ${{ steps.tag.outputs.tag_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          short_sha="${GITHUB_SHA::7}"
+          tag_name="release-$(date -u +'%Y%m%d%H%M%S')-${short_sha}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag_name}" -m "Release ${tag_name}"
+          git push origin "refs/tags/${tag_name}"
+
+          echo "tag_name=${tag_name}" >> "${GITHUB_OUTPUT}"
+
+  deploy-dev:
+    name: Deploy tag to dev
+    needs: create-tag
+    uses: ./.github/workflows/reusable-terraform.yml
+    with:
+      command: apply
+      target_environment: dev
+      checkout_ref: refs/tags/${{ needs.create-tag.outputs.tag_name }}
+      skip_plan: false
+    secrets: inherit
