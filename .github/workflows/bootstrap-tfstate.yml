@@ -1,0 +1,123 @@
+name: Bootstrap Terraform State
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to bootstrap
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - dev
+          - test
+          - prod
+          - eph
+      location:
+        description: Azure region for state resources
+        required: true
+        default: canadacentral
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-tfstate
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Bootstrap ${{ inputs.environment }} tfstate
+    runs-on: ubuntu-latest
+
+    env:
+      TARGET_ENVIRONMENT: ${{ inputs.environment }}
+      LOCATION: ${{ inputs.location }}
+      CONTAINER_NAME: tfstate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login with service principal
+        uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Create Terraform state storage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${TARGET_ENVIRONMENT}" == "all" ]]; then
+            environments=(dev test prod eph)
+          else
+            environments=("${TARGET_ENVIRONMENT}")
+          fi
+
+          subscription_id="$(az account show --query id -o tsv)"
+          subscription_hash="$(printf '%s' "${subscription_id}" | sha256sum | cut -c1-6)"
+
+          for env_name in "${environments[@]}"; do
+            resource_group_name="rg-tfstate-${env_name}"
+            storage_account_name="tfstate${subscription_hash}${env_name}"
+
+            echo "Bootstrapping ${env_name}"
+            echo "Resource group: ${resource_group_name}"
+            echo "Storage account: ${storage_account_name}"
+
+            if [[ "$(az group exists --name "${resource_group_name}")" == "false" ]]; then
+              az group create \
+                --name "${resource_group_name}" \
+                --location "${LOCATION}" \
+                --output none
+            else
+              echo "Resource group already exists."
+            fi
+
+            if az storage account show \
+              --name "${storage_account_name}" \
+              --resource-group "${resource_group_name}" \
+              --query id \
+              --output tsv > /dev/null 2>&1; then
+              echo "Storage account already exists."
+            else
+              if [[ "$(az storage account check-name --name "${storage_account_name}" --query nameAvailable -o tsv)" != "true" ]]; then
+                echo "Storage account name ${storage_account_name} is unavailable outside ${resource_group_name}."
+                exit 1
+              fi
+
+              az storage account create \
+                --name "${storage_account_name}" \
+                --resource-group "${resource_group_name}" \
+                --location "${LOCATION}" \
+                --sku Standard_LRS \
+                --kind StorageV2 \
+                --https-only true \
+                --min-tls-version TLS1_2 \
+                --allow-blob-public-access false \
+                --output none
+            fi
+
+            account_key="$(az storage account keys list \
+              --account-name "${storage_account_name}" \
+              --resource-group "${resource_group_name}" \
+              --query '[0].value' \
+              --output tsv)"
+
+            az storage container create \
+              --name "${CONTAINER_NAME}" \
+              --account-name "${storage_account_name}" \
+              --account-key "${account_key}" \
+              --public-access off \
+              --output none
+
+            echo "Backend config:"
+            echo "  resource_group_name  = \"${resource_group_name}\""
+            echo "  storage_account_name = \"${storage_account_name}\""
+            echo "  container_name       = \"${CONTAINER_NAME}\""
+            echo "  key                  = \"${env_name}.terraform.tfstate\""
+          done
