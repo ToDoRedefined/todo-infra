@@ -15,3 +15,13 @@ resource "azurerm_resource_group" "monitoring" {
     environment : var.environment
   }
 }
+
+
+resource "azurerm_resource_group" "monitoring1" {
+  name     = "${local.namespace_prefix}rg-monitoring-${var.environment}-${var.location}"
+  location = var.location
+
+  tags = {
+    environment : var.environment
+  }
+}
