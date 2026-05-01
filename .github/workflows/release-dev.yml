@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   create-tag:
-    name: Create release tag
+    name: Create semantic version tag
     runs-on: ubuntu-latest
 
     outputs:
@@ -26,21 +26,72 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create and push tag
-        id: tag
-        shell: bash
+      - name: Get latest semantic tag
+        id: get_tag
         run: |
-          set -euo pipefail
+          git fetch --tags
+          latest_tag=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
 
-          short_sha="${GITHUB_SHA::7}"
-          tag_name="release-$(date -u +'%Y%m%d%H%M%S')-${short_sha}"
+          if [ -z "$latest_tag" ]; then
+            latest_tag="v0.0.0"
+          fi
 
+          echo "Latest tag: $latest_tag"
+          echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
+
+      - name: Decide version bump (major/minor/patch)
+        id: bump
+        run: |
+          commit_msg=$(git log -1 --pretty=%B)
+
+          echo "Commit message: $commit_msg"
+
+          if echo "$commit_msg" | grep -q "BREAKING"; then
+            bump_type="major"
+          elif echo "$commit_msg" | grep -q "feat"; then
+            bump_type="minor"
+          else
+            bump_type="patch"
+          fi
+
+          echo "Bump type: $bump_type"
+          echo "bump_type=$bump_type" >> $GITHUB_OUTPUT
+
+      - name: Calculate new version
+        id: new_tag
+        run: |
+          version=${{ steps.get_tag.outputs.latest_tag }}
+          version=${version#v}
+
+          IFS='.' read -r major minor patch <<< "$version"
+
+          case "${{ steps.bump.outputs.bump_type }}" in
+            major)
+              major=$((major+1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor+1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch+1))
+              ;;
+          esac
+
+          new_tag="v$major.$minor.$patch"
+
+          echo "New tag: $new_tag"
+          echo "tag_name=$new_tag" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${tag_name}" -m "Release ${tag_name}"
-          git push origin "refs/tags/${tag_name}"
 
-          echo "tag_name=${tag_name}" >> "${GITHUB_OUTPUT}"
+          git tag -a "${{ steps.new_tag.outputs.tag_name }}" -m "Release ${{ steps.new_tag.outputs.tag_name }}"
+          git push origin "${{ steps.new_tag.outputs.tag_name }}"
 
   deploy-dev:
     name: Deploy tag to dev
