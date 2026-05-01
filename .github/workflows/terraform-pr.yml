@@ -62,13 +62,26 @@ jobs:
       skip_plan: false
     secrets: inherit
 
-  eph-apply-destroy:
-    name: Apply and destroy eph
+  eph-apply:
+    name: Apply eph
     needs: validate
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     uses: ./.github/workflows/reusable-terraform.yml
     with:
-      command: apply-destroy
+      command: apply
+      target_environment: eph
+      namespace: pr-${{ github.event.pull_request.number }}
+      checkout_ref: ${{ github.event.pull_request.head.sha }}
+      skip_plan: false
+    secrets: inherit
+
+  eph-destroy:
+    name: Destroy eph
+    needs: eph-apply
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    uses: ./.github/workflows/reusable-terraform.yml
+    with:
+      command: destroy
       target_environment: eph
       namespace: pr-${{ github.event.pull_request.number }}
       checkout_ref: ${{ github.event.pull_request.head.sha }}
