@@ -99,7 +99,7 @@ jobs:
               exit 1
             fi
 
-            namespace="${NAMESPACE}-"
+            namespace="${NAMESPACE}"
             state_key="${TARGET_ENVIRONMENT}-${NAMESPACE}.terraform.tfstate"
           fi
 
