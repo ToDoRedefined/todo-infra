@@ -1,0 +1,71 @@
+name: Terraform Plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_type:
+        description: Apply from a branch or a tag.
+        required: true
+        default: branch
+        type: choice
+        options:
+          - branch
+          - tag
+      ref_name:
+        description: Branch or tag name.
+        required: true
+        default: main
+        type: string
+      target_environment:
+        description: Environment to plan.
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-plan-${{ inputs.target_environment }}
+  cancel-in-progress: true
+
+jobs:
+  resolve-ref:
+    name: Resolve source ref
+    runs-on: ubuntu-latest
+
+    outputs:
+      checkout_ref: ${{ steps.ref.outputs.checkout_ref }}
+
+    steps:
+      - name: Resolve ref
+        id: ref
+        shell: bash
+        env:
+          SOURCE_TYPE: ${{ inputs.source_type }}
+          REF_NAME: ${{ inputs.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${SOURCE_TYPE}" == "tag" ]]; then
+            checkout_ref="refs/tags/${REF_NAME}"
+          else
+            checkout_ref="refs/heads/${REF_NAME}"
+          fi
+
+          echo "checkout_ref=${checkout_ref}" >> "${GITHUB_OUTPUT}"
+
+  terraform-plan:
+    name: Terraform plan
+    needs: resolve-ref
+    uses: ./.github/workflows/reusable-terraform.yml
+    with:
+      command: plan
+      target_environment: ${{ inputs.target_environment }}
+      checkout_ref: ${{ needs.resolve-ref.outputs.checkout_ref }}
+      namespace: ${{ inputs.namespace }}
+    secrets: inherit
