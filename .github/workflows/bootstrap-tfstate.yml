@@ -45,7 +45,10 @@ jobs:
         uses: azure/login@v2
         with:
           creds: >-
-            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{
+            secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{
+            secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{
+            secrets.AZURE_TENANT_ID }}"}
 
       - name: Create Terraform state storage
         shell: bash
@@ -73,10 +76,16 @@ jobs:
               az group create \
                 --name "${resource_group_name}" \
                 --location "${LOCATION}" \
+                --tags environment="${env_name}" \
                 --output none
             else
               echo "Resource group already exists."
             fi
+
+            az group update \
+              --name "${resource_group_name}" \
+              --set tags.environment="${env_name}" \
+              --output none
 
             if az storage account show \
               --name "${storage_account_name}" \
@@ -99,8 +108,15 @@ jobs:
                 --https-only true \
                 --min-tls-version TLS1_2 \
                 --allow-blob-public-access false \
+                --tags environment="${env_name}" \
                 --output none
             fi
+
+            az storage account update \
+              --name "${storage_account_name}" \
+              --resource-group "${resource_group_name}" \
+              --set tags.environment="${env_name}" \
+              --output none
 
             account_key="$(az storage account keys list \
               --account-name "${storage_account_name}" \
