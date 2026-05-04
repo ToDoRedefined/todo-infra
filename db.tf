@@ -74,18 +74,17 @@ resource "azurerm_key_vault_secret" "db_port" {
 
 resource "azurerm_cosmosdb_account" "cosmos" {
   name                = "todo-cosmos-${var.environment}-${var.location}"
-  location            = azurerm_resource_group.core.location
-  resource_group_name = azurerm_resource_group.core.name
-
-  offer_type = "Standard"
-  kind       = "GlobalDocumentDB"
+  location            = azurerm_resource_group.db.location
+  resource_group_name = azurerm_resource_group.db.name
+  offer_type          = "Standard"
+  kind                = "GlobalDocumentDB"
 
   consistency_policy {
     consistency_level = "Session"
   }
 
   geo_location {
-    location          = azurerm_resource_group.core.location
+    location          = azurerm_resource_group.db.location
     failover_priority = 0
   }
 
@@ -94,13 +93,13 @@ resource "azurerm_cosmosdb_account" "cosmos" {
 
 resource "azurerm_cosmosdb_sql_database" "cosmos_db" {
   name                = "todo-audit"
-  resource_group_name = azurerm_resource_group.core.name
+  resource_group_name = azurerm_resource_group.db.name
   account_name        = azurerm_cosmosdb_account.cosmos.name
 }
 
 resource "azurerm_cosmosdb_sql_container" "cosmos_container" {
   name                  = "events"
-  resource_group_name   = azurerm_resource_group.core.name
+  resource_group_name   = azurerm_resource_group.db.name
   account_name          = azurerm_cosmosdb_account.cosmos.name
   database_name         = azurerm_cosmosdb_sql_database.cosmos_db.name
   partition_key_paths   = ["/id"]
@@ -137,8 +136,8 @@ resource "azurerm_key_vault_secret" "cosmos_container" {
 
 resource "azurerm_redis_cache" "redis" {
   name                = "todo-redis-${var.environment}-${var.location}"
-  location            = azurerm_resource_group.core.location
-  resource_group_name = azurerm_resource_group.core.name
+  location            = azurerm_resource_group.db.location
+  resource_group_name = azurerm_resource_group.db.name
 
   capacity = 1
   family   = "C"
