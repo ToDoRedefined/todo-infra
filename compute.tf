@@ -11,12 +11,12 @@ resource "azurerm_kubernetes_cluster" "aks" {
   resource_group_name = azurerm_resource_group.compute.name
   dns_prefix          = "aks-${var.environment}-${var.location}"
 
-  kubernetes_version = "1.29.0"
+  kubernetes_version = "1.35.0"
 
   default_node_pool {
     name       = "systempool"
     node_count = 1
-    vm_size    = "Standard_DS2_v2"
+    vm_size    = "standard_d2ls_v5"
 
     vnet_subnet_id = azurerm_subnet.snet["aks"].id
 
@@ -43,7 +43,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "app_pool" {
   name                  = "apppool"
   kubernetes_cluster_id = azurerm_kubernetes_cluster.aks.id
 
-  vm_size    = "Standard_DS2_v2"
+  vm_size    = "standard_d2ls_v5"
   node_count = 1
 
   mode = "User"
